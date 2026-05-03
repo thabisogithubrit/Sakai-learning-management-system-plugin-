@@ -1,0 +1,93 @@
+# Start:
+#   docker compose up -d --build
+#
+# Stop:
+#   docker compose down
+#
+# Reset database completely:
+#   docker compose down -v
+#   docker compose up -d --build
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: sspa-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: AnalyticalDataStore
+      POSTGRES_USER: SakaiLMSPlugin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SakaiLMSPlugin@2026}
+      TZ: Africa/Maseru
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Host folder used for CSV imports. Files here are visible inside PostgreSQL at /tmp/sakai_import.
+      - ./sakai_exports:/tmp/sakai_import
+      # Optional database init scripts. These run only when the postgres_data volume is empty.
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U SakaiLMSPlugin -d AnalyticalDataStore"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - sspa_net
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: sspa-api-gateway
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SSPA_DB_HOST: postgres
+      SSPA_DB_PORT: "5432"
+      SSPA_DB_NAME: AnalyticalDataStore
+      SSPA_DB_USER: SakaiLMSPlugin
+      SSPA_DB_PASSWORD: ${POSTGRES_PASSWORD:-SakaiLMSPlugin@2026}
+      SSPA_TOKEN_TTL_SECONDS: "28800"
+      PYTHONUNBUFFERED: "1"
+      TZ: Africa/Maseru
+    ports:
+      - "8000:8000"
+    volumes:
+      # Development hot reload. Remove this volume for production image-only deployment.
+      - ./api-gateway/app:/app/app
+      - ./api-gateway/scripts:/app/scripts
+      - ./api-gateway/models:/app/models
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    networks:
+      - sspa_net
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: sspa-pgadmin
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@sspa.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-Admin@123}
+      TZ: Africa/Maseru
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - sspa_net
+
+networks:
+  sspa_net:
+    name: sspa_net
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: sspa_postgres_data
+  pgadmin_data:
+    name: sspa_pgadmin_data
